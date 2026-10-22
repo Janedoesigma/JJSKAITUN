@@ -1,5 +1,5 @@
 --[[
-    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v6
+    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v8
     by jane_doesigma — UI: WindUI
 ]]
 
@@ -16,11 +16,17 @@ local LocalPlayer = Players.LocalPlayer
 --============================================================
 -- 2. CONSTANTES
 --============================================================
-local VOID_CFRAME          = CFrame.new(-144, -1500, -352)
+local VOID_CFRAME          = CFrame.new(-144, -10000, -352)
 local ULT_MAX              = 100
 local MIN_PLAYERS          = 4
-local TPALL_OFFSET         = CFrame.new(0, 0, -2)
-local DOMAIN_TP_INTERVAL   = 0.27
+
+-- ✅ NOVO: offset no tronco (0,0,0) em vez de atrás (0,0,-2)
+local TPALL_OFFSET         = CFrame.new(0, 0, 0)
+
+-- ✅ NOVO: quantos teleportes ficar no mesmo alvo antes de trocar
+local STICK_TELEPORTS      = 5
+
+local DOMAIN_TP_INTERVAL   = 0.1
 local DOMAIN_GR_INTERVAL   = 0.2
 local DOMAIN_VOID_WAIT     = 2
 local DOMAIN_GR_START_WAIT = 0.5
@@ -104,7 +110,6 @@ end
 --============================================================
 -- 7. ALVOS
 --============================================================
--- Jogadores vivos
 local function getAlivePlayers()
     local list = {}
     for _, p in ipairs(Players:GetPlayers()) do
@@ -119,7 +124,6 @@ local function getAlivePlayers()
     return list
 end
 
--- Dummies vivos (busca recursiva, com fallback de parte)
 local DUMMY_PATTERNS = { "dummy", "tester1234", "trainingdummy", "training_dummy", "targetdummy", "target_dummy" }
 
 local function isDummyName(name)
@@ -174,8 +178,39 @@ local function getAliveDummies()
     return list
 end
 
+-- ✅ NOVO: pool unificado (players + dummies)
+local function getAllAliveTargets(playersList, dummiesList)
+    local list = {}
+    for _, t in ipairs(playersList or getAlivePlayers())   do table.insert(list, t) end
+    for _, t in ipairs(dummiesList or getAliveDummies())   do table.insert(list, t) end
+    return list
+end
+
 --============================================================
--- 8. SERVER HOP
+-- 8. STICK HELPERS
+--============================================================
+-- Verifica se o último alvo ainda está vivo e válido
+local function lastTargetStillValid(lastRoot)
+    if not lastRoot or not lastRoot.Parent then return false end
+    local hum = lastRoot.Parent:FindFirstChildOfClass("Humanoid")
+    return hum and hum.Health > 0
+end
+
+-- Escolhe próximo alvo (evita repetir o mesmo se houver alternativa)
+local function pickNextTarget(allTargets, lastRoot)
+    local candidates = {}
+    for _, t in ipairs(allTargets) do
+        if t.root and t.root.Parent and t.root ~= lastRoot then
+            table.insert(candidates, t)
+        end
+    end
+    local pool = (#candidates > 0) and candidates or allTargets
+    if #pool == 0 then return nil end
+    return pool[math.random(1, #pool)]
+end
+
+--============================================================
+-- 9. SERVER HOP
 --============================================================
 local function serverHop(minPlayers)
     minPlayers = minPlayers or MIN_PLAYERS
@@ -198,7 +233,7 @@ local function serverHop(minPlayers)
 end
 
 --============================================================
--- 9. TECLAS
+-- 10. TECLAS
 --============================================================
 local function pressKey(kc)
     pcall(function()
@@ -209,7 +244,7 @@ local function pressKey(kc)
 end
 
 --============================================================
--- 10. DOMAIN EXPANSION (players)
+-- 11. DOMAIN EXPANSION (players + dummies, com stick)
 --============================================================
 local DomainActive    = false
 local DomainToggleRef = nil
@@ -251,12 +286,17 @@ local function startDomain()
             return
         end
 
-        local lastRoot = nil
-        while DomainActive do
-            local alive = getAlivePlayers()
+        local lastRoot     = nil
+        local stickCounter = 0
 
-            if #alive == 0 then
-                Notify("Domain Expansion", "Todos mortos! Server hop...", "refresh-cw")
+        while DomainActive do
+            local alivePlayers = getAlivePlayers()
+            local aliveDummies = getAliveDummies()
+            local allTargets   = getAllAliveTargets(alivePlayers, aliveDummies)
+
+            -- Server hop SÓ quando TODOS os PLAYERS morrerem (dummies não contam)
+            if #alivePlayers == 0 then
+                Notify("Domain Expansion", "Todos os players morreram! Server hop...", "refresh-cw")
                 DomainActive = false
                 pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
                 setCfg("DomainToggle", false)
@@ -268,19 +308,23 @@ local function startDomain()
                 break
             end
 
-            if isAlive() then
-                local candidates = {}
-                for _, t in ipairs(alive) do
-                    if t.root ~= lastRoot and t.root.Parent then
-                        table.insert(candidates, t)
-                    end
-                end
-                local pool   = (#candidates > 0) and candidates or alive
-                local target = pool[math.random(1, #pool)]
+            if isAlive() and #allTargets > 0 then
+                local currentTarget = nil
 
-                if target and target.root and target.root.Parent then
-                    forceTeleport(target.root.CFrame * TPALL_OFFSET)
-                    lastRoot = target.root
+                -- 1) Tenta manter o alvo atual se ainda estiver válido e stickCounter não estourou
+                if lastTargetStillValid(lastRoot) and stickCounter < STICK_TELEPORTS then
+                    currentTarget = { root = lastRoot }
+                else
+                    -- 2) Escolhe novo alvo (alternando players ↔ dummies)
+                    currentTarget = pickNextTarget(allTargets, lastRoot)
+                    lastRoot = currentTarget and currentTarget.root or nil
+                    stickCounter = 0
+                end
+
+                if currentTarget and currentTarget.root and currentTarget.root.Parent then
+                    -- ✅ Teleporta NO TRONCO (offset 0,0,0)
+                    forceTeleport(currentTarget.root.CFrame * TPALL_OFFSET)
+                    stickCounter = stickCounter + 1
                 end
             end
 
@@ -292,7 +336,7 @@ local function startDomain()
 end
 
 --============================================================
--- 11. TEST DOMAIN DUMMY (novo)
+-- 12. TEST DOMAIN DUMMY (só dummies, com stick)
 --============================================================
 local DummyDomainActive = false
 local DummyToggleRef    = nil
@@ -315,12 +359,10 @@ local function startDummyDomain()
     DummyDomainActive = true
 
     task.spawn(function()
-        -- 1) Void (1x) + espera
         forceTeleport(VOID_CFRAME)
         task.wait(DOMAIN_VOID_WAIT)
         if not DummyDomainActive then return end
 
-        -- 2) R+G contínuo (R primeiro, G depois)
         local rgLoop = task.spawn(function()
             while DummyDomainActive do
                 pressKey(Enum.KeyCode.R)
@@ -330,35 +372,36 @@ local function startDummyDomain()
             end
         end)
 
-        -- 3) Espera 0.5s
         task.wait(DOMAIN_GR_START_WAIT)
         if not DummyDomainActive then
             pcall(function() if coroutine.status(rgLoop) ~= "dead" then task.cancel(rgLoop) end end)
             return
         end
 
-        -- 4) Loop de teleporte entre dummies (não troca de server, não para)
-        local lastRoot = nil
-        while DummyDomainActive do
-            -- Se o player morreu (ex: caiu no void e ainda não respawnou), espera
-            if isAlive() then
-                local alive = getAliveDummies()
-                if #alive > 0 then
-                    local candidates = {}
-                    for _, t in ipairs(alive) do
-                        if t.root ~= lastRoot and t.root.Parent then
-                            table.insert(candidates, t)
-                        end
-                    end
-                    local pool   = (#candidates > 0) and candidates or alive
-                    local target = pool[math.random(1, #pool)]
+        local lastRoot     = nil
+        local stickCounter = 0
 
-                    if target and target.root and target.root.Parent then
-                        forceTeleport(target.root.CFrame * TPALL_OFFSET)
-                        lastRoot = target.root
+        while DummyDomainActive do
+            if isAlive() then
+                local aliveDummies = getAliveDummies()
+
+                if #aliveDummies > 0 then
+                    local currentTarget = nil
+
+                    if lastTargetStillValid(lastRoot) and stickCounter < STICK_TELEPORTS then
+                        currentTarget = { root = lastRoot }
+                    else
+                        currentTarget = pickNextTarget(aliveDummies, lastRoot)
+                        lastRoot = currentTarget and currentTarget.root or nil
+                        stickCounter = 0
+                    end
+
+                    if currentTarget and currentTarget.root and currentTarget.root.Parent then
+                        forceTeleport(currentTarget.root.CFrame * TPALL_OFFSET)
+                        stickCounter = stickCounter + 1
                     end
                 end
-                -- Se não há dummies vivos: só continua (sem hop, sem parar)
+                -- Sem dummies vivos: continua esperando (sem hop, sem parar)
             end
 
             task.wait(DOMAIN_TP_INTERVAL)
@@ -369,7 +412,7 @@ local function startDummyDomain()
 end
 
 --============================================================
--- 12. UI
+-- 13. UI
 --============================================================
 WindUI = loadstring(game:HttpGet(
     "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
@@ -399,10 +442,9 @@ if ConfigState.ToggleKey   then pcall(function() Window:SetToggleKey(Enum.KeyCod
 -- Aba principal -------------------------------------------------
 local MainTab = Window:Tab({ Title = "Main", Icon = "bird" })
 
--- Toggle Domain (players) ---------------------------------------
 DomainToggleRef = MainTab:Toggle({
     Title = "Kill All 0.2 Domain Expansion [GOJO]",
-    Desc  = "Requer 100% de Awakening. Void → G+R → teleporta entre players vivos.",
+    Desc  = "Void → G+R → teleporta NO TRONCO de players + Dummies. Hop quando todos players mortos.",
     Icon  = "zap",
     Type  = "Checkbox",
     Value = getCfg("DomainToggle", false),
@@ -423,10 +465,9 @@ DomainToggleRef = MainTab:Toggle({
     end,
 })
 
--- Toggle Test Domain Dummy (novo) -------------------------------
 DummyToggleRef = MainTab:Toggle({
     Title = "Test Domain 0.2 Second Dummy",
-    Desc  = "R+G → teleporta entre Dummies. Nunca troca de server, só para se desligar.",
+    Desc  = "R+G → teleporta NO TRONCO de Dummies. Nunca troca de server, só para se desligar.",
     Icon  = "flask-conical",
     Type  = "Checkbox",
     Value = getCfg("DummyDomainToggle", false),
@@ -447,13 +488,13 @@ DummyToggleRef = MainTab:Toggle({
     end,
 })
 
--- Bypass void (mantido) -----------------------------------------
+-- Bypass void -----------------------------------------------
 MainTab:Button({
     Title = "Bypass Teleport (Void)",
-    Desc  = "Teleporta direto pro void X:-144 Y:-1500 Z:-352.",
+    Desc  = "Teleporta direto pro void X:-144 Y:-10000 Z:-352.",
     Callback = function()
         task.spawn(function()
-            for _ = 1, 15 do
+            for _ = 1, 25 do
                 local char = LocalPlayer.Character
                 local hrp  = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
@@ -464,7 +505,7 @@ MainTab:Button({
                         hrp.AssemblyAngularVelocity = Vector3.zero
                     end)
                 end
-                task.wait(0.05)
+                task.wait(0.03)
             end
             Notify("Bypass Teleport", "Teleportado pro void.", "move")
         end)
@@ -493,7 +534,7 @@ if getCfg("DummyDomainToggle", false) then
     end)
 end
 
--- Aba Config (mantida intacta) ----------------------------------
+-- Aba Config --------------------------------------------------
 local ConfigTab = Window:Tab({ Title = "Config", Icon = "settings" })
 
 ConfigTab:Dropdown({
@@ -556,7 +597,7 @@ ConfigTab:Button({
     end,
 })
 
--- Flush notificações pendentes
+-- Flush notificações
 for _, n in ipairs(Pending) do Notify(n[1], n[2], n[3]) end
 Pending = {}
 Notify("0.2 KILL ALL GOJO", "Script carregado. Ative um toggle pra começar.", "check-circle")
