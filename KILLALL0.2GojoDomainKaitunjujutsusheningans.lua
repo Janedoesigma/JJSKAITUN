@@ -1,5 +1,5 @@
 --[[
-    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v5
+    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v6
     by jane_doesigma — UI: WindUI
 ]]
 
@@ -102,8 +102,9 @@ local function forceTeleport(cf)
 end
 
 --============================================================
--- 7. ALVOS (SÓ JOGADORES VIVOS)
+-- 7. ALVOS
 --============================================================
+-- Jogadores vivos
 local function getAlivePlayers()
     local list = {}
     for _, p in ipairs(Players:GetPlayers()) do
@@ -112,6 +113,61 @@ local function getAlivePlayers()
             local r = p.Character:FindFirstChild("HumanoidRootPart")
             if h and h.Health > 0 and r then
                 table.insert(list, { root = r })
+            end
+        end
+    end
+    return list
+end
+
+-- Dummies vivos (busca recursiva, com fallback de parte)
+local DUMMY_PATTERNS = { "dummy", "tester1234", "trainingdummy", "training_dummy", "targetdummy", "target_dummy" }
+
+local function isDummyName(name)
+    local lower = name:lower()
+    for _, p in ipairs(DUMMY_PATTERNS) do
+        if lower:find(p, 1, true) then return true end
+    end
+    return false
+end
+
+local function getHRP(model)
+    if not model then return nil end
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("RootPart")
+        or model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("Head")
+end
+
+local DummyCache = { list = {}, lastUpdate = 0 }
+
+local function refreshDummyCache(force)
+    local now = tick()
+    if not force and (now - DummyCache.lastUpdate) < 0.5 then
+        return DummyCache.list
+    end
+    DummyCache.lastUpdate = now
+    local list = {}
+    for _, o in ipairs(workspace:GetDescendants()) do
+        if o:IsA("Model") and isDummyName(o.Name) then
+            local h = o:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                local r = getHRP(o)
+                if r then table.insert(list, { model = o, root = r }) end
+            end
+        end
+    end
+    DummyCache.list = list
+    return list
+end
+
+local function getAliveDummies()
+    local list = {}
+    for _, d in ipairs(refreshDummyCache()) do
+        if d.root and d.root.Parent then
+            local h = d.model:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                table.insert(list, { root = d.root })
             end
         end
     end
@@ -153,7 +209,7 @@ local function pressKey(kc)
 end
 
 --============================================================
--- 10. DOMAIN EXPANSION
+-- 10. DOMAIN EXPANSION (players)
 --============================================================
 local DomainActive    = false
 local DomainToggleRef = nil
@@ -161,7 +217,6 @@ local DomainToggleRef = nil
 local function stopDomain() DomainActive = false end
 
 local function startDomain()
-    -- Checa Ult
     local percent = getUltPercent()
     if percent < 100 then
         Notify("Domain Expansion", "Pegue Awakening primeiro! (" .. percent .. "%)", "alert-triangle")
@@ -177,12 +232,10 @@ local function startDomain()
     DomainActive = true
 
     task.spawn(function()
-        -- 1) Teleporta pro void UMA VEZ
         forceTeleport(VOID_CFRAME)
         task.wait(DOMAIN_VOID_WAIT)
         if not DomainActive then return end
 
-        -- 2) Loop G+R contínuo
         local grLoop = task.spawn(function()
             while DomainActive do
                 pressKey(Enum.KeyCode.G)
@@ -192,20 +245,17 @@ local function startDomain()
             end
         end)
 
-        -- 3) Espera 0.5s pra começar os teleportes
         task.wait(DOMAIN_GR_START_WAIT)
         if not DomainActive then
             pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
             return
         end
 
-        -- 4) Loop de teleporte entre players vivos
         local lastRoot = nil
         while DomainActive do
             local alive = getAlivePlayers()
 
             if #alive == 0 then
-                -- Todos mortos → server hop na hora
                 Notify("Domain Expansion", "Todos mortos! Server hop...", "refresh-cw")
                 DomainActive = false
                 pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
@@ -219,7 +269,6 @@ local function startDomain()
             end
 
             if isAlive() then
-                -- Filtra pra não repetir o último alvo, se possível
                 local candidates = {}
                 for _, t in ipairs(alive) do
                     if t.root ~= lastRoot and t.root.Parent then
@@ -243,7 +292,84 @@ local function startDomain()
 end
 
 --============================================================
--- 11. UI
+-- 11. TEST DOMAIN DUMMY (novo)
+--============================================================
+local DummyDomainActive = false
+local DummyToggleRef    = nil
+
+local function stopDummyDomain() DummyDomainActive = false end
+
+local function startDummyDomain()
+    local percent = getUltPercent()
+    if percent < 100 then
+        Notify("Test Domain Dummy", "Pegue Awakening primeiro! (" .. percent .. "%)", "alert-triangle")
+        DummyDomainActive = false
+        setCfg("DummyDomainToggle", false)
+        if DummyToggleRef then
+            task.defer(function() pcall(function() DummyToggleRef:Set(false) end) end)
+        end
+        return
+    end
+
+    if DummyDomainActive then return end
+    DummyDomainActive = true
+
+    task.spawn(function()
+        -- 1) Void (1x) + espera
+        forceTeleport(VOID_CFRAME)
+        task.wait(DOMAIN_VOID_WAIT)
+        if not DummyDomainActive then return end
+
+        -- 2) R+G contínuo (R primeiro, G depois)
+        local rgLoop = task.spawn(function()
+            while DummyDomainActive do
+                pressKey(Enum.KeyCode.R)
+                task.wait(0.03)
+                pressKey(Enum.KeyCode.G)
+                task.wait(DOMAIN_GR_INTERVAL - 0.03)
+            end
+        end)
+
+        -- 3) Espera 0.5s
+        task.wait(DOMAIN_GR_START_WAIT)
+        if not DummyDomainActive then
+            pcall(function() if coroutine.status(rgLoop) ~= "dead" then task.cancel(rgLoop) end end)
+            return
+        end
+
+        -- 4) Loop de teleporte entre dummies (não troca de server, não para)
+        local lastRoot = nil
+        while DummyDomainActive do
+            -- Se o player morreu (ex: caiu no void e ainda não respawnou), espera
+            if isAlive() then
+                local alive = getAliveDummies()
+                if #alive > 0 then
+                    local candidates = {}
+                    for _, t in ipairs(alive) do
+                        if t.root ~= lastRoot and t.root.Parent then
+                            table.insert(candidates, t)
+                        end
+                    end
+                    local pool   = (#candidates > 0) and candidates or alive
+                    local target = pool[math.random(1, #pool)]
+
+                    if target and target.root and target.root.Parent then
+                        forceTeleport(target.root.CFrame * TPALL_OFFSET)
+                        lastRoot = target.root
+                    end
+                end
+                -- Se não há dummies vivos: só continua (sem hop, sem parar)
+            end
+
+            task.wait(DOMAIN_TP_INTERVAL)
+        end
+
+        pcall(function() if coroutine.status(rgLoop) ~= "dead" then task.cancel(rgLoop) end end)
+    end)
+end
+
+--============================================================
+-- 12. UI
 --============================================================
 WindUI = loadstring(game:HttpGet(
     "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
@@ -273,6 +399,7 @@ if ConfigState.ToggleKey   then pcall(function() Window:SetToggleKey(Enum.KeyCod
 -- Aba principal -------------------------------------------------
 local MainTab = Window:Tab({ Title = "Main", Icon = "bird" })
 
+-- Toggle Domain (players) ---------------------------------------
 DomainToggleRef = MainTab:Toggle({
     Title = "Kill All 0.2 Domain Expansion [GOJO]",
     Desc  = "Requer 100% de Awakening. Void → G+R → teleporta entre players vivos.",
@@ -292,6 +419,30 @@ DomainToggleRef = MainTab:Toggle({
         else
             setCfg("DomainToggle", false)
             stopDomain()
+        end
+    end,
+})
+
+-- Toggle Test Domain Dummy (novo) -------------------------------
+DummyToggleRef = MainTab:Toggle({
+    Title = "Test Domain 0.2 Second Dummy",
+    Desc  = "R+G → teleporta entre Dummies. Nunca troca de server, só para se desligar.",
+    Icon  = "flask-conical",
+    Type  = "Checkbox",
+    Value = getCfg("DummyDomainToggle", false),
+    Callback = function(state)
+        if state then
+            if getUltPercent() < 100 then
+                setCfg("DummyDomainToggle", false)
+                Notify("Test Domain Dummy", "Pegue Awakening primeiro! (" .. getUltPercent() .. "%)", "alert-triangle")
+                task.defer(function() pcall(function() DummyToggleRef:Set(false) end) end)
+                return
+            end
+            setCfg("DummyDomainToggle", true)
+            startDummyDomain()
+        else
+            setCfg("DummyDomainToggle", false)
+            stopDummyDomain()
         end
     end,
 })
@@ -320,7 +471,7 @@ MainTab:Button({
     end,
 })
 
--- Auto-start (só se Ult estiver 100%) ---------------------------
+-- Auto-start --------------------------------------------------
 if getCfg("DomainToggle", false) then
     task.defer(function()
         if getUltPercent() >= 100 then
@@ -328,6 +479,16 @@ if getCfg("DomainToggle", false) then
         else
             setCfg("DomainToggle", false)
             if DomainToggleRef then pcall(function() DomainToggleRef:Set(false) end) end
+        end
+    end)
+end
+if getCfg("DummyDomainToggle", false) then
+    task.defer(function()
+        if getUltPercent() >= 100 then
+            startDummyDomain()
+        else
+            setCfg("DummyDomainToggle", false)
+            if DummyToggleRef then pcall(function() DummyToggleRef:Set(false) end) end
         end
     end)
 end
@@ -378,7 +539,9 @@ ConfigTab:Button({
         if isfile and isfile(CONFIG_FILE) then pcall(function() delfile(CONFIG_FILE) end) end
         ConfigState = {}
         stopDomain()
+        stopDummyDomain()
         if DomainToggleRef then pcall(function() DomainToggleRef:Set(false) end) end
+        if DummyToggleRef    then pcall(function() DummyToggleRef:Set(false) end) end
         Notify("Configuração Resetada", "Tudo voltou ao padrão.", "refresh-cw")
     end,
 })
@@ -396,4 +559,4 @@ ConfigTab:Button({
 -- Flush notificações pendentes
 for _, n in ipairs(Pending) do Notify(n[1], n[2], n[3]) end
 Pending = {}
-Notify("0.2 KILL ALL GOJO", "Script carregado. Ative o toggle pra começar.", "check-circle")
+Notify("0.2 KILL ALL GOJO", "Script carregado. Ative um toggle pra começar.", "check-circle")
