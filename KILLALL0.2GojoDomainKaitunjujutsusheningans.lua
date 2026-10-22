@@ -1,5 +1,5 @@
 --[[
-    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v3
+    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v4
     by jane_doesigma — UI: WindUI
 ]]
 
@@ -18,7 +18,7 @@ local LocalPlayer = Players.LocalPlayer
 -- 2. CONSTANTES
 --============================================================
 local ORIGIN_CFRAME      = CFrame.new(-76.900146, -41.295113, -213.595673)
-local VOID_CFRAME        = CFrame.new(-144, -1500, -352)
+local VOID_CFRAME        = CFrame.new(-144, -1500, -352)   -- X:-144  Y:-1500  Z:-352
 
 local ULT_MAX            = 100
 local TP_TO_ORIGIN_WAIT  = 0.6
@@ -30,12 +30,10 @@ local AWAKEN_TP_INTERVAL = 0.25
 local AWAKEN_COOLDOWN    = 30
 local MIN_PLAYERS        = 4
 
--- Kill All
 local TP_INTERVAL        = 0.5
 local COUNTER_TIME       = 300
 local REVERT_THRESHOLD   = 10
 
--- Teleport All
 local TPALL_INTERVAL     = 0.6
 local TPALL_OFFSET       = CFrame.new(0, 0, -2)
 
@@ -103,10 +101,7 @@ local function stopAllLoops()
     end
 end
 
-local function stopKillAllOnly()
-    KillAllActive = false
-end
-
+local function stopKillAllOnly() KillAllActive = false end
 local function track(t) table.insert(Loops, t); return t end
 
 --============================================================
@@ -139,7 +134,7 @@ local function getUltPercent()
 end
 
 --============================================================
--- 8. HELPERS DE PERSONAGEM (corrigidos)
+-- 8. HELPERS DE PERSONAGEM
 --============================================================
 local function getRoot()
     local c = LocalPlayer.Character
@@ -154,7 +149,6 @@ local function isAlive()
     return h and h.Health > 0
 end
 
--- Mata APENAS via Health = 0 (evita ragdoll quebrado do BreakJoints)
 local function killCharacter()
     local h = getHum()
     if h and h.Health > 0 then
@@ -162,20 +156,17 @@ local function killCharacter()
     end
 end
 
--- Espera pela morte + respawn completo (robusto)
 local function waitForRespawn(timeout)
     timeout = timeout or 15
-    -- 1) espera a morte registrar
     local t0 = tick()
     while tick() - t0 < 4 do
         if not isAlive() then break end
         task.wait(0.1)
     end
-    -- 2) espera o respawn
     t0 = tick()
     while tick() - t0 < timeout do
         if isAlive() and getRoot() then
-            task.wait(0.6) -- deixa o personagem "assentar"
+            task.wait(0.6)
             return true
         end
         task.wait(0.2)
@@ -187,14 +178,69 @@ local function isNear(pos, target, thr)
     return (pos - target).Magnitude <= (thr or REVERT_THRESHOLD)
 end
 
+-- Teleporte robusto: seta CFrame + zera velocidade pra física não empurrar de volta
+local function forceTeleport(cf)
+    local char = LocalPlayer.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return false end
+    pcall(function() hrp.CFrame = cf end)
+    pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+    pcall(function() hrp.AssemblyAngularVelocity = Vector3.zero end)
+    return true
+end
+
 --============================================================
--- 9. ALVOS
+-- 9. DETECÇÃO DE ALVOS (CORRIGIDA)
 --============================================================
-local function findDummy()
-    for _, o in ipairs(workspace:GetChildren()) do
-        if o.Name == "Dummy" or o.Name == "Tester1234" then
+local DUMMY_PATTERNS = { "dummy", "tester1234", "trainingdummy", "training_dummy", "targetdummy", "target_dummy" }
+
+local function isDummyName(name)
+    local lower = name:lower()
+    for _, p in ipairs(DUMMY_PATTERNS) do
+        if lower:find(p, 1, true) then return true end
+    end
+    return false
+end
+
+-- HumanoidRootPart com fallback (R6, R15 e dummies customizados)
+local function getHRP(model)
+    if not model then return nil end
+    return model:FindFirstChild("HumanoidRootPart")
+        or model:FindFirstChild("RootPart")
+        or model:FindFirstChild("UpperTorso")
+        or model:FindFirstChild("Torso")
+        or model:FindFirstChild("Head")
+end
+
+-- Cache de dummies (refresh a cada 0.5s pra não spammar GetDescendants)
+local DummyCache = { list = {}, lastUpdate = 0 }
+
+local function refreshDummyCache(force)
+    local now = tick()
+    if not force and (now - DummyCache.lastUpdate) < 0.5 then
+        return DummyCache.list
+    end
+    DummyCache.lastUpdate = now
+    local list = {}
+    -- Busca recursiva por TODOS os models cujo nome bate com padrão de dummy
+    for _, o in ipairs(workspace:GetDescendants()) do
+        if o:IsA("Model") and isDummyName(o.Name) then
             local h = o:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then return o end
+            if h and h.Health > 0 then
+                local r = getHRP(o)
+                if r then table.insert(list, { model = o, root = r }) end
+            end
+        end
+    end
+    DummyCache.list = list
+    return list
+end
+
+local function findDummy()
+    for _, d in ipairs(refreshDummyCache()) do
+        if d.model and d.model.Parent then
+            local h = d.model:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then return d.model end
         end
     end
 end
@@ -210,12 +256,11 @@ local function getAliveTargets()
             end
         end
     end
-    for _, o in ipairs(workspace:GetChildren()) do
-        if o.Name == "Dummy" or o.Name == "Tester1234" then
-            local h = o:FindFirstChildOfClass("Humanoid")
-            local r = o:FindFirstChild("HumanoidRootPart")
-            if h and h.Health > 0 and r then
-                table.insert(list, { root = r })
+    for _, d in ipairs(refreshDummyCache()) do
+        if d.root and d.root.Parent then
+            local h = d.model:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then
+                table.insert(list, { root = d.root })
             end
         end
     end
@@ -279,11 +324,8 @@ local function startAwakening()
             while AwakenActive do
                 for _, t in ipairs(getAliveTargets()) do
                     if not AwakenActive then break end
-                    local root = getRoot()
-                    if root and t.root and t.root.Parent then
-                        pcall(function()
-                            root.CFrame = t.root.CFrame * TPALL_OFFSET
-                        end)
+                    if t.root and t.root.Parent then
+                        forceTeleport(t.root.CFrame * TPALL_OFFSET)
                     end
                     task.wait(AWAKEN_TP_INTERVAL)
                 end
@@ -304,7 +346,6 @@ local function startAwakening()
     end))
 end
 
--- Monitor independente da Ult
 task.spawn(function()
     while task.wait(0.2) do
         local p = getUltPercent()
@@ -319,7 +360,7 @@ task.spawn(function()
 end)
 
 --============================================================
--- 13. KILL ALL (corrigido: teleporta 1x, mata 1x)
+-- 13. KILL ALL (teleporta 1x + mata 1x)
 --============================================================
 local function startKillAll()
     if KillAllActive then return end
@@ -327,7 +368,6 @@ local function startKillAll()
 
     track(task.spawn(function()
         while KillAllActive do
-            -- Se estiver morto, aguarda respawn ANTES de qualquer coisa
             if not isAlive() then
                 waitForRespawn(15)
                 task.wait(0.3)
@@ -338,33 +378,22 @@ local function startKillAll()
             if not root then task.wait(1); continue end
             local oldPos = root.Position
 
-            -- Teleporta pro CFrame original (UMA VEZ)
-            pcall(function() root.CFrame = ORIGIN_CFRAME end)
+            forceTeleport(ORIGIN_CFRAME)
             task.wait(TP_INTERVAL)
 
-            -- Checa se "voltou"
             local r2 = getRoot()
             if not r2 then task.wait(1); continue end
             local reverted = isNear(r2.Position, oldPos, REVERT_THRESHOLD)
 
             if reverted then
-                -- ─── Volta ao lugar: teleporta 1x + mata 1x + espera respawn ───
                 Notify("Kill All", "Boneco voltou — resetando...", "skull")
-
-                local r = getRoot()
-                if r then pcall(function() r.CFrame = ORIGIN_CFRAME end) end
+                forceTeleport(ORIGIN_CFRAME)
                 task.wait(TP_INTERVAL)
-
                 killCharacter()
-                waitForRespawn(20)   -- espera morte + respawn completo
-
-                -- Se ainda estiver morto após 20s, dá mais um tempo
-                if not isAlive() then
-                    task.wait(3)
-                end
+                waitForRespawn(20)
+                if not isAlive() then task.wait(3) end
                 task.wait(0.5)
             else
-                -- ─── Não voltou: contador de 5 minutos ───
                 local elapsed, interrupted = 0, false
                 while elapsed < COUNTER_TIME and KillAllActive do
                     task.wait(1)
@@ -380,27 +409,25 @@ local function startKillAll()
                     task.wait(0.5); continue
                 end
 
-                -- ─── Ataque ao Dummy ───
                 if KillAllActive then
                     local dummy = findDummy()
                     if dummy then
-                        local tr = dummy:FindFirstChild("HumanoidRootPart")
+                        local tr = getHRP(dummy)
                         local r = getRoot()
                         if tr and r then
                             pcall(function()
-                                r.CFrame = tr.CFrame * TPALL_OFFSET
                                 tr.CFrame = CFrame.lookAt(tr.Position, r.Position)
                             end)
+                            forceTeleport(tr.CFrame * TPALL_OFFSET)
                             pcall(function()
                                 RapidPunchesRE:FireServer(
                                     LocalPlayer.Character.Moveset["Rapid Punches"], nil)
                             end)
                             task.wait(TP_TO_ORIGIN_WAIT)
-                            local r2b = getRoot()
-                            if r2b then pcall(function() r2b.CFrame = ORIGIN_CFRAME end) end
+                            forceTeleport(ORIGIN_CFRAME)
                             task.wait(0.2)
                             local r3 = getRoot()
-                            local tr2 = dummy:FindFirstChild("HumanoidRootPart")
+                            local tr2 = getHRP(dummy)
                             if r3 and tr2 then
                                 local dist = (r3.Position - tr2.Position).Magnitude
                                 if dist > SAFE_DISTANCE then
@@ -408,9 +435,9 @@ local function startKillAll()
                                 else
                                     while KillAllActive and dummy and dummy.Parent and isAlive() do
                                         local nr  = getRoot()
-                                        local ntr = dummy:FindFirstChild("HumanoidRootPart")
+                                        local ntr = getHRP(dummy)
                                         if not nr or not ntr then break end
-                                        pcall(function() nr.CFrame = ntr.CFrame * TPALL_OFFSET end)
+                                        forceTeleport(ntr.CFrame * TPALL_OFFSET)
                                         pcall(function() GojoRE:FireServer(false, nil) end)
                                         task.wait(ATTACK_INTERVAL)
                                         if not KillAllActive then break end
@@ -447,7 +474,7 @@ local function startKillAll()
 end
 
 --============================================================
--- 14. TELEPORT ALL 0.2 (novo)
+-- 14. TELEPORT ALL 0.2 (corrigido)
 --============================================================
 local function startTeleportAll()
     if TeleportAllActive then return end
@@ -455,27 +482,37 @@ local function startTeleportAll()
 
     track(task.spawn(function()
         local lastRoot = nil
+        local warnSent = false
         while TeleportAllActive do
+            if not isAlive() then
+                lastRoot = nil
+                task.wait(1)
+                continue
+            end
+
             local targets = getAliveTargets()
             if #targets > 0 then
-                -- Filtra pra NÃO repetir o último alvo (a não ser que só exista ele)
+                warnSent = false
+
+                -- Filtra pra não repetir o último alvo (se houver alternativa)
                 local candidates = {}
                 for _, t in ipairs(targets) do
-                    if t.root ~= lastRoot then
+                    if t.root and t.root.Parent and t.root ~= lastRoot then
                         table.insert(candidates, t)
                     end
                 end
-                local pool = (#candidates > 0) and candidates or targets
+                local pool   = (#candidates > 0) and candidates or targets
                 local target = pool[math.random(1, #pool)]
 
-                local root = getRoot()
-                if root and target and target.root and target.root.Parent then
-                    pcall(function()
-                        root.CFrame = target.root.CFrame * TPALL_OFFSET
-                    end)
+                if target and target.root and target.root.Parent then
+                    forceTeleport(target.root.CFrame * TPALL_OFFSET)
                     lastRoot = target.root
                 end
+            elseif not warnSent then
+                Notify("Teleport All", "Nenhum alvo encontrado", "alert-circle")
+                warnSent = true
             end
+
             task.wait(TPALL_INTERVAL)
         end
     end))
@@ -505,18 +542,18 @@ local Window = WindUI:CreateWindow({
     ScrollBarEnabled = false,
 })
 
-if ConfigState.Theme then pcall(function() WindUI:SetTheme(ConfigState.Theme) end) end
+if ConfigState.Theme       then pcall(function() WindUI:SetTheme(ConfigState.Theme) end) end
 if ConfigState.Transparent then pcall(function() Window:ToggleTransparency(true) end) end
-if ConfigState.ToggleKey then pcall(function() Window:SetToggleKey(Enum.KeyCode[ConfigState.ToggleKey]) end) end
+if ConfigState.ToggleKey   then pcall(function() Window:SetToggleKey(Enum.KeyCode[ConfigState.ToggleKey]) end) end
 
 -- Aba principal -------------------------------------------------
 local MainTab = Window:Tab({ Title = "Main", Icon = "bird" })
 
 MainTab:Toggle({
     Title = "0.2 KILL ALL GOJO [BETA]",
-    Desc = "Loop completo de Kill All + Awakening.",
-    Icon = "sword",
-    Type = "Checkbox",
+    Desc  = "Loop completo de Kill All + Awakening.",
+    Icon  = "sword",
+    Type  = "Checkbox",
     Value = getCfg("KillAllToggle", false),
     Callback = function(state)
         setCfg("KillAllToggle", state)
@@ -526,9 +563,9 @@ MainTab:Toggle({
 
 MainTab:Toggle({
     Title = "Teleport All 0.2",
-    Desc = "Teleporta atrás de um alvo aleatório (inclui Dummy) a cada 0.6s.",
-    Icon = "move",
-    Type = "Checkbox",
+    Desc  = "Teleporta atrás de um alvo aleatório (jogadores + Dummy) a cada 0.6s.",
+    Icon  = "move",
+    Type  = "Checkbox",
     Value = getCfg("TeleportAllToggle", false),
     Callback = function(state)
         setCfg("TeleportAllToggle", state)
@@ -536,33 +573,43 @@ MainTab:Toggle({
     end,
 })
 
--- Botões rápidos ------------------------------------------------
+-- Bypass VOID: empurra 15x em 0.75s pra "grudar" no void antes do anticheat/física
 MainTab:Button({
     Title = "Bypass Teleport (Void)",
-    Desc = "Teleporta para X:-144 Y:-1500 Z:-352.",
+    Desc  = "Teleporta direto pro void X:-144 Y:-1500 Z:-352.",
     Callback = function()
-        local r = getRoot()
-        if r then
-            pcall(function() r.CFrame = VOID_CFRAME end)
-            Notify("Bypass Teleport", "Teleportado para o void.", "move")
-        end
+        task.spawn(function()
+            for i = 1, 15 do
+                local char = LocalPlayer.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    pcall(function()
+                        hrp.CFrame = VOID_CFRAME
+                        hrp.Position = VOID_CFRAME.Position
+                        hrp.AssemblyLinearVelocity  = Vector3.zero
+                        hrp.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                end
+                task.wait(0.05)
+            end
+            Notify("Bypass Teleport", "Teleportado pro void.", "move")
+        end)
     end,
 })
 
 MainTab:Button({
     Title = "Teleport Test",
-    Desc = "Teleporta para o CFrame original salvo.",
+    Desc  = "Teleporta pro CFrame original salvo (X:-76.9 Y:-41.29 Z:-213.59).",
     Callback = function()
-        local r = getRoot()
-        if r then
-            pcall(function() r.CFrame = ORIGIN_CFRAME end)
-            Notify("Teleport Test", "Teleportado para o CFrame original.", "crosshair")
+        if forceTeleport(ORIGIN_CFRAME) then
+            Notify("Teleport Test", "Teleportado pro CFrame original.", "crosshair")
+        else
+            Notify("Teleport Test", "Personagem não encontrado.", "alert-circle")
         end
     end,
 })
 
--- Auto-start se estava ativo
-if getCfg("KillAllToggle", false) then task.defer(startKillAll) end
+if getCfg("KillAllToggle", false)    then task.defer(startKillAll) end
 if getCfg("TeleportAllToggle", false) then task.defer(startTeleportAll) end
 
 -- Aba Status ----------------------------------------------------
@@ -574,14 +621,14 @@ local StatusPara = StatusTab:Paragraph({
 })
 task.spawn(function()
     while task.wait(0.5) do
+        local dummyCount = #refreshDummyCache()
         local txt = string.format(
             "Ult: %d%%   |   Vivo: %s   |   KillAll: %s   |   TPAll: %s   |   Awakening: %s\n" ..
-            "Jogadores: %d   |   Dummy: %s",
+            "Jogadores: %d   |   Dummies vivos: %d",
             getUltPercent(), tostring(isAlive()),
             tostring(KillAllActive), tostring(TeleportAllActive),
             tostring(AwakenActive),
-            #Players:GetPlayers(),
-            findDummy() and "Sim" or "Não"
+            #Players:GetPlayers(), dummyCount
         )
         pcall(function() StatusPara:SetDesc(txt) end)
     end
@@ -639,7 +686,7 @@ ConfigTab:Button({
 
 ConfigTab:Button({
     Title = "Forçar Server Hop",
-    Desc  = "Troca para servidor com 4+ jogadores.",
+    Desc  = "Troca pra servidor com 4+ jogadores.",
     Callback = function()
         Notify("Server Hop", "Procurando servidor...", "refresh-cw")
         task.wait(0.5)
@@ -647,7 +694,7 @@ ConfigTab:Button({
     end,
 })
 
--- Flush notificações
+-- Flush notificações pendentes
 for _, n in ipairs(Pending) do Notify(n[1], n[2], n[3]) end
 Pending = {}
-Notify("0.2 KILL ALL GOJO", "Script carregado. Ative um toggle para começar.", "check-circle")
+Notify("0.2 KILL ALL GOJO", "Script carregado. Ative um toggle pra começar.", "check-circle")
