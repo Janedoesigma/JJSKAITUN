@@ -1,132 +1,132 @@
 --[[
     0.2 KILL ALL GOJO [Jujutsu Shenanigans]
-    by jane_doesigma
-    UI: WindUI
+    by jane_doesigma — UI: WindUI
 ]]
 
----------------------------------------------------------------------
--- 1. SERVIÇOS E VARIÁVEIS GLOBAIS
----------------------------------------------------------------------
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local TeleportService = game:GetService("TeleportService")
-local HttpService = game:GetService("HttpService")
+--============================================================
+-- 1. SERVIÇOS
+--============================================================
+local Players            = game:GetService("Players")
+local ReplicatedStorage  = game:GetService("ReplicatedStorage")
+local TeleportService    = game:GetService("TeleportService")
+local HttpService        = game:GetService("HttpService")
+local VirtualInputManager= game:GetService("VirtualInputManager")
 
 local LocalPlayer = Players.LocalPlayer
 
--- CFrames e constantes -------------------------------------------------
-local ORIGIN_CFRAME = CFrame.new(-76.900146, -41.295113, -213.595673)
-local ULT_MAX = 100                     -- valor máximo da barra de Ult (ajuste se necessário)
-local ATTACK_INTERVAL = 3               -- segundos entre cada skill (Lapse/Reversal/Twofold)
-local TP_TO_ORIGIN_WAIT = 0.6           -- espera antes de voltar ao CFrame original após Rapid Punches
-local SAFE_DISTANCE = 50                -- studs de “área segura”
-local SAFE_WAIT = 15.5                  -- espera se estiver longe do alvo
-local AWAKEN_LOOP_TIME = 9.5            -- duração do loop de teleporte no Awakening
-local AWAKEN_TP_INTERVAL = 0.25         -- intervalo entre teleportes no Awakening
-local MIN_PLAYERS_TO_STAY = 4           -- mínimo de jogadores para NÃO trocar de servidor
+--============================================================
+-- 2. CONSTANTES
+--============================================================
+local ORIGIN_CFRAME      = CFrame.new(-76.900146, -41.295113, -213.595673)
+local ULT_MAX            = 100
+local TP_TO_ORIGIN_WAIT  = 0.6
+local SAFE_DISTANCE      = 50
+local SAFE_WAIT          = 15.5
+local ATTACK_INTERVAL    = 3
+local AWAKEN_LOOP_TIME   = 9.5
+local AWAKEN_TP_INTERVAL = 0.25
+local AWAKEN_COOLDOWN    = 30
+local MIN_PLAYERS        = 4
 
--- RemoteEvents ----------------------------------------------------------
-local RapidPunchesRE = ReplicatedStorage:WaitForChild("Knit")
-    :WaitForChild("Knit")
-    :WaitForChild("Services")
-    :WaitForChild("RapidPunchesService")
-    :WaitForChild("RE")
-    :WaitForChild("Activated")
+-- Kill All
+local TP_INTERVAL        = 0.5
+local KILL_REPEAT        = 3
+local RESPAWN_WAIT       = 2
+local COUNTER_TIME       = 300
+local REVERT_THRESHOLD   = 10
 
-local GojoRE = ReplicatedStorage:WaitForChild("Knit")
-    :WaitForChild("Knit")
-    :WaitForChild("Services")
-    :WaitForChild("GojoService")
-    :WaitForChild("RE")
-    :WaitForChild("Activated")
+--============================================================
+-- 3. REMOTE EVENTS
+--============================================================
+local function getRE(svc, ev)
+    return ReplicatedStorage:WaitForChild("Knit")
+        :WaitForChild("Knit")
+        :WaitForChild("Services")
+        :WaitForChild(svc)
+        :WaitForChild("RE")
+        :WaitForChild(ev)
+end
 
-local LapseBlueRE = ReplicatedStorage:WaitForChild("Knit")
-    :WaitForChild("Knit")
-    :WaitForChild("Services")
-    :WaitForChild("LapseBlueService")
-    :WaitForChild("RE")
-    :WaitForChild("Activated")
+local RapidPunchesRE = getRE("RapidPunchesService", "Activated")
+local GojoRE         = getRE("GojoService", "Activated")
+local LapseBlueRE    = getRE("LapseBlueService", "Activated")
+local ReversalRedRE  = getRE("ReversalRedService", "Activated")
+local TwofoldKickRE  = getRE("TwofoldKickService", "Activated")
 
-local ReversalRedRE = ReplicatedStorage:WaitForChild("Knit")
-    :WaitForChild("Knit")
-    :WaitForChild("Services")
-    :WaitForChild("ReversalRedService")
-    :WaitForChild("RE")
-    :WaitForChild("Activated")
-
-local TwofoldKickRE = ReplicatedStorage:WaitForChild("Knit")
-    :WaitForChild("Knit")
-    :WaitForChild("Services")
-    :WaitForChild("TwofoldKickService")
-    :WaitForChild("RE")
-    :WaitForChild("Activated")
-
----------------------------------------------------------------------
--- 2. CONFIGURAÇÃO E SALVAMENTO (WindUI ConfigManager)
----------------------------------------------------------------------
--- O WindUI já tem um ConfigManager integrado que usa a pasta do Window.
--- Vamos usar as funções nativas do executor para persistência extra.
+--============================================================
+-- 4. CONFIG PERSISTENTE
+--============================================================
 local CONFIG_FOLDER = "0.2KillAllGojo"
-local CONFIG_FILE = CONFIG_FOLDER .. "/config.json"
+local CONFIG_FILE   = CONFIG_FOLDER .. "/config.json"
 
 local function saveConfig(data)
     if not (writefile and isfolder and makefolder) then return end
-    if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
-    writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+    pcall(function()
+        if not isfolder(CONFIG_FOLDER) then makefolder(CONFIG_FOLDER) end
+        writefile(CONFIG_FILE, HttpService:JSONEncode(data))
+    end)
 end
 
 local function loadConfig()
-    if not (isfile and readfile) then return {} end
-    if isfile(CONFIG_FILE) then
-        local ok, decoded = pcall(function()
-            return HttpService:JSONDecode(readfile(CONFIG_FILE))
-        end)
-        if ok then return decoded end
-    end
+    if not (isfile and readfile and isfile(CONFIG_FILE)) then return {} end
+    local ok, d = pcall(function() return HttpService:JSONDecode(readfile(CONFIG_FILE)) end)
+    if ok and type(d) == "table" then return d end
     return {}
 end
 
----------------------------------------------------------------------
--- 3. UTILITÁRIOS DE ESTADO
----------------------------------------------------------------------
--- Tabela que guarda o estado de cada toggle/slider para salvamento.
-local ConfigState = loadConfig()   -- carrega valores salvos (ou tabela vazia)
+local ConfigState = loadConfig()
 
-local function getConfig(key, default)
-    return ConfigState[key] ~= nil and ConfigState[key] or default
-end
+local function getCfg(k, d) if ConfigState[k] ~= nil then return ConfigState[k] end return d end
+local function setCfg(k, v) ConfigState[k] = v end
 
-local function setConfig(key, value)
-    ConfigState[key] = value
-end
-
--- Controle de loops -----------------------------------------------------
+--============================================================
+-- 5. ESTADO DOS LOOPS
+--============================================================
 local KillAllActive = false
-local AwakenActive = false
-local CurrentLoopThreads = {}
+local AwakenActive  = false
+local Loops         = {}
 
 local function stopAllLoops()
     KillAllActive = false
-    AwakenActive = false
-    for _, thread in pairs(CurrentLoopThreads) do
-        if coroutine.status(thread) ~= "dead" then
-            task.cancel(thread)
-        end
+    AwakenActive  = false
+    for i = #Loops, 1, -1 do
+        local t = Loops[i]
+        pcall(function()
+            if coroutine.status(t) ~= "dead" then task.cancel(t) end
+        end)
+        table.remove(Loops, i)
     end
-    CurrentLoopThreads = {}
 end
 
----------------------------------------------------------------------
--- 4. DETECÇÃO DE ULT (AttributeChanged)
----------------------------------------------------------------------
--- Função que verifica o atributo da Ult e retorna a porcentagem (0-100).
+local function track(t)
+    table.insert(Loops, t)
+    return t
+end
+
+--============================================================
+-- 6. NOTIFICAÇÃO PENDENTE
+--============================================================
+local WindUI = nil
+local Pending = {}
+
+local function Notify(title, content, icon)
+    if WindUI then
+        WindUI:Notify({ Title = title, Content = content, Duration = 4, Icon = icon or "info" })
+    else
+        table.insert(Pending, { title, content, icon })
+    end
+end
+
+--============================================================
+-- 7. DETECÇÃO DE ULT
+--============================================================
+local ULT_ATTRS = {
+    "Ultimate","Ult","Awakening","AwakeningBar",
+    "SixEyes","UltimateBar","UltPercent","Domain"
+}
+
 local function getUltPercent()
-    -- O nome do atributo pode variar; tente os mais comuns.
-    local possibleNames = {
-        "Ultimate", "Ult", "Awakening", "AwakeningBar",
-        "SixEyes", "UltimateBar", "UltPercent"
-    }
-    for _, name in ipairs(possibleNames) do
+    for _, name in ipairs(ULT_ATTRS) do
         local v = LocalPlayer:GetAttribute(name)
         if type(v) == "number" then
             return math.clamp(math.floor(v / ULT_MAX * 100), 0, 100)
@@ -135,210 +135,309 @@ local function getUltPercent()
     return 0
 end
 
--- Monitoramento constante da Ult ---------------------------------------
+--============================================================
+-- 8. HELPERS DE PERSONAGEM
+--============================================================
+local function getRoot()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChild("HumanoidRootPart")
+end
+local function getHum()
+    local c = LocalPlayer.Character
+    return c and c:FindFirstChildOfClass("Humanoid")
+end
+local function isAlive()
+    local h = getHum()
+    return h and h.Health > 0
+end
+local function killCharacter()
+    local h = getHum()
+    if h and h.Health > 0 then
+        pcall(function() h.Health = 0 end)
+        local c = LocalPlayer.Character
+        if c and c.BreakJoints then pcall(function() c:BreakJoints() end) end
+    end
+end
+local function waitForRespawn(timeout)
+    timeout = timeout or 10
+    local t0 = tick()
+    while tick() - t0 < timeout do
+        if isAlive() and getRoot() then return true end
+        task.wait(0.25)
+    end
+    return false
+end
+local function isNear(pos, target, thr)
+    return (pos - target).Magnitude <= (thr or REVERT_THRESHOLD)
+end
+
+--============================================================
+-- 9. ALVOS
+--============================================================
+local function findDummy()
+    for _, o in ipairs(workspace:GetChildren()) do
+        if o.Name == "Dummy" or o.Name == "Tester1234" then
+            local h = o:FindFirstChildOfClass("Humanoid")
+            if h and h.Health > 0 then return o end
+        end
+    end
+end
+
+local function getAliveTargets()
+    local list = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            local h = p.Character:FindFirstChildOfClass("Humanoid")
+            local r = p.Character:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and r then
+                table.insert(list, { root = r })
+            end
+        end
+    end
+    for _, o in ipairs(workspace:GetChildren()) do
+        if o.Name == "Dummy" or o.Name == "Tester1234" then
+            local h = o:FindFirstChildOfClass("Humanoid")
+            local r = o:FindFirstChild("HumanoidRootPart")
+            if h and h.Health > 0 and r then
+                table.insert(list, { root = r })
+            end
+        end
+    end
+    return list
+end
+
+--============================================================
+-- 10. SERVER HOP
+--============================================================
+local function serverHop(minPlayers)
+    minPlayers = minPlayers or MIN_PLAYERS
+    local url = string.format(
+        "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=100",
+        game.PlaceId
+    )
+    local ok, data = pcall(function() return HttpService:JSONDecode(game:HttpGet(url)) end)
+    if ok and data and data.data then
+        for _, s in ipairs(data.data) do
+            if s.id ~= game.JobId and s.playing >= minPlayers and s.maxPlayers > s.playing then
+                if pcall(function()
+                    TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LocalPlayer)
+                end) then return true end
+            end
+        end
+    end
+    pcall(function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end)
+    return false
+end
+
+--============================================================
+-- 11. PRESSIONAR TECLA
+--============================================================
+local function pressKey(kc)
+    pcall(function()
+        VirtualInputManager:SendKeyEvent(true, kc, false, game)
+        task.wait(0.03)
+        VirtualInputManager:SendKeyEvent(false, kc, false, game)
+    end)
+end
+
+--============================================================
+-- 12. AWAKENING
+--============================================================
+local lastAwakenTime = 0
+
+local function startAwakening()
+    if AwakenActive then return end
+    AwakenActive = true
+    lastAwakenTime = tick()
+
+    track(task.spawn(function()
+        local gLoop = task.spawn(function()
+            while AwakenActive and getUltPercent() >= 100 do
+                pressKey(Enum.KeyCode.G)
+                task.wait(0.05)
+                pressKey(Enum.KeyCode.R)
+                task.wait(0.2)
+            end
+        end)
+        local tpLoop = task.spawn(function()
+            while AwakenActive do
+                local targets = getAliveTargets()
+                for _, t in ipairs(targets) do
+                    if not AwakenActive then break end
+                    local root = getRoot()
+                    if root and t.root and t.root.Parent then
+                        pcall(function()
+                            root.CFrame = t.root.CFrame * CFrame.new(0, 0, -2)
+                        end)
+                    end
+                    task.wait(AWAKEN_TP_INTERVAL)
+                end
+                task.wait(0.05)
+            end
+        end)
+
+        task.wait(AWAKEN_LOOP_TIME)
+        AwakenActive = false
+
+        pcall(function() if coroutine.status(gLoop) ~= "dead" then task.cancel(gLoop) end end)
+        pcall(function() if coroutine.status(tpLoop) ~= "dead" then task.cancel(tpLoop) end end)
+
+        local count = #Players:GetPlayers()
+        if count < MIN_PLAYERS then
+            Notify("Server Hop", "Procurando servidor com " .. MIN_PLAYERS .. "+ jogadores...", "refresh-cw")
+            task.wait(1)
+            serverHop(MIN_PLAYERS)
+        end
+    end))
+end
+
+-- Monitor independente da Ult (não é cancelado por stopAllLoops)
 task.spawn(function()
     while task.wait(0.2) do
-        local percent = getUltPercent()
-        if percent >= 100 and not AwakenActive then
-            -- Ult cheia: para tudo e inicia o loop de Awakening.
-            stopAllLoops()
-            AwakenActive = true
-            local thread = task.spawn(function()
-                -- 1) Loop de pressionar G+R
-                local awakenLoop = task.spawn(function()
-                    while AwakenActive and getUltPercent() >= 100 do
-                        -- Simula pressionar G e R (teclas de Awakening + Special)
-                        -- Use VirtualInputManager ou keypress do executor.
-                        if keypress then
-                            keypress(0x47) -- G
-                            task.wait(0.05)
-                            keypress(0x52) -- R
-                        end
-                        task.wait(0.2)
-                    end
+        local p = getUltPercent()
+        if p >= 100
+            and not AwakenActive
+            and (tick() - lastAwakenTime) > AWAKEN_COOLDOWN then
+            -- Cancelar loops de KillAll (sem parar o monitor)
+            KillAllActive = false
+            for i = #Loops, 1, -1 do
+                local t = Loops[i]
+                pcall(function()
+                    if coroutine.status(t) ~= "dead" then task.cancel(t) end
                 end)
-
-                -- 2) Loop de teleporte para tronco de jogadores vivos
-                local tpLoop = task.spawn(function()
-                    while AwakenActive do
-                        local targets = {}
-                        for _, plr in ipairs(Players:GetPlayers()) do
-                            if plr ~= LocalPlayer and plr.Character then
-                                local hum = plr.Character:FindFirstChildOfClass("Humanoid")
-                                if hum and hum.Health > 0 then
-                                    table.insert(targets, plr)
-                                end
-                            end
-                        end
-                        -- Inclui Dummy/Tester1234 se existir
-                        for _, obj in ipairs(workspace:GetChildren()) do
-                            if obj.Name == "Tester1234" or obj.Name == "Dummy" then
-                                local hum = obj:FindFirstChildOfClass("Humanoid")
-                                if hum and hum.Health > 0 then
-                                    table.insert(targets, obj)
-                                end
-                            end
-                        end
-
-                        for _, target in ipairs(targets) do
-                            if not AwakenActive then break end
-                            local root = target:IsA("Model") and target:FindFirstChild("HumanoidRootPart")
-                                or (target.Character and target.Character:FindFirstChild("HumanoidRootPart"))
-                            if root then
-                                LocalPlayer.Character.HumanoidRootPart.CFrame =
-                                    root.CFrame * CFrame.new(0, 0, -2) -- teleporta para trás
-                            end
-                            task.wait(AWAKEN_TP_INTERVAL)
-                        end
-                    end
-                end)
-
-                -- 3) Timer de 9.5 segundos
-                task.wait(AWAKEN_LOOP_TIME)
-                AwakenActive = false
-                -- Cancela loops internos
-                if coroutine.status(awakenLoop) ~= "dead" then task.cancel(awakenLoop) end
-                if coroutine.status(tpLoop) ~= "dead" then task.cancel(tpLoop) end
-
-                -- 4) Troca de servidor se necessário
-                local playerCount = #Players:GetPlayers()
-                if playerCount < MIN_PLAYERS_TO_STAY then
-                    -- Procura um servidor com pelo menos MIN_PLAYERS_TO_STAY jogadores
-                    local ok, servers = pcall(function()
-                        return HttpService:JSONDecode(game:HttpGet(
-                            "https://games.roblox.com/v1/games/" .. game.PlaceId ..
-                            "/servers/Public?limit=100"
-                        ))
-                    end)
-                    if ok and servers and servers.data then
-                        for _, srv in ipairs(servers.data) do
-                            if srv.playing >= MIN_PLAYERS_TO_STAY then
-                                TeleportService:TeleportToPlaceInstance(game.PlaceId, srv.id, LocalPlayer)
-                                break
-                            end
-                        end
-                    else
-                        -- Fallback: teleporte aleatório
-                        TeleportService:Teleport(game.PlaceId, LocalPlayer)
-                    end
-                end
-            end)
-            table.insert(CurrentLoopThreads, thread)
+                table.remove(Loops, i)
+            end
+            Notify("Ult 100%", "Iniciando Awakening automático...", "zap")
+            startAwakening()
         end
     end
 end)
 
----------------------------------------------------------------------
--- 5. LOOP PRINCIPAL DE KILL ALL
----------------------------------------------------------------------
--- Função que executa o ciclo completo (chamada quando o toggle está ON).
-local function startKillAllLoop()
+--============================================================
+-- 13. KILL ALL LOOP
+--============================================================
+local function startKillAll()
+    if KillAllActive then return end
     KillAllActive = true
-    local thread = task.spawn(function()
+
+    track(task.spawn(function()
         while KillAllActive do
-            -- 1) Teleporta para o CFrame original
-            if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                LocalPlayer.Character.HumanoidRootPart.CFrame = ORIGIN_CFRAME
+            if not isAlive() then
+                waitForRespawn(15)
+                task.wait(0.5)
+                continue
             end
-            task.wait(0.1)
 
-            -- 2) Verifica se o jogador “voltou” (posição mudou).
-            local startPos = LocalPlayer.Character.HumanoidRootPart.Position
-            task.wait(1) -- janela para o jogador se mover
-            local newPos = LocalPlayer.Character.HumanoidRootPart.Position
-            local moved = (newPos - startPos).Magnitude > 5
+            local root = getRoot()
+            if not root then task.wait(1); continue end
+            local oldPos = root.Position
 
-            if moved then
-                -- Jogador voltou: executa 3 teleportes rápidos + kill.
-                for i = 1, 3 do
+            -- Teleporta pro CFrame original
+            pcall(function() root.CFrame = ORIGIN_CFRAME end)
+            task.wait(TP_INTERVAL)
+
+            local r2 = getRoot()
+            if not r2 then task.wait(1); continue end
+            local reverted = isNear(r2.Position, oldPos, REVERT_THRESHOLD)
+
+            if reverted then
+                Notify("Kill All", "Boneco voltou — resetando...", "skull")
+                for i = 1, KILL_REPEAT do
                     if not KillAllActive then break end
-                    LocalPlayer.Character.HumanoidRootPart.CFrame = ORIGIN_CFRAME
-                    task.wait(0.2)
+                    local r = getRoot()
+                    if r then pcall(function() r.CFrame = ORIGIN_CFRAME end) end
+                    task.wait(TP_INTERVAL)
+                    killCharacter()
+                    task.wait(RESPAWN_WAIT)
+                    if not waitForRespawn(10) then task.wait(2) end
                 end
-                -- Após os 3 teleportes, espera 5 minutos (contador) antes de atacar?
-                -- Sua lógica: “se ele vê que voltou... contador de 5 minutos”.
-                -- Vamos implementar como um wait de 300 s, mas com checagem de toggle.
-                local timer = 0
-                while timer < 300 and KillAllActive do
+            else
+                -- Contador de 5 minutos
+                local elapsed, interrupted = 0, false
+                while elapsed < COUNTER_TIME and KillAllActive do
                     task.wait(1)
-                    timer = timer + 1
-                end
-                if not KillAllActive then break end
-            end
-
-            -- 3) Encontra o alvo (Dummy / Tester1234) e teleporta para trás.
-            local targetModel
-            for _, obj in ipairs(workspace:GetChildren()) do
-                if obj.Name == "Dummy" or obj.Name == "Tester1234" then
-                    local hum = obj:FindFirstChildOfClass("Humanoid")
-                    if hum and hum.Health > 0 then
-                        targetModel = obj
-                        break
+                    elapsed = elapsed + 1
+                    local r = getRoot()
+                    if not r or not isAlive() then interrupted = true; break end
+                    if not isNear(r.Position, ORIGIN_CFRAME.Position, 15) then
+                        interrupted = true; break
                     end
                 end
-            end
+                if interrupted then
+                    Notify("Kill All", "Saiu do CFrame — reiniciando", "alert-triangle")
+                    task.wait(0.5); continue
+                end
 
-            if targetModel then
-                local targetRoot = targetModel:FindFirstChild("HumanoidRootPart")
-                if targetRoot and LocalPlayer.Character then
-                    -- Teleporta para trás do alvo.
-                    LocalPlayer.Character.HumanoidRootPart.CFrame =
-                        targetRoot.CFrame * CFrame.new(0, 0, -2)
-                    -- Faz o alvo olhar para o jogador (opcional).
-                    targetRoot.CFrame = CFrame.lookAt(targetRoot.Position, LocalPlayer.Character.HumanoidRootPart.Position)
-
-                    -- Executa Rapid Punches.
-                    RapidPunchesRE:FireServer(
-                        LocalPlayer.Character.Moveset["Rapid Punches"],
-                        nil
-                    )
-
-                    -- Espera 0.6 s e volta ao CFrame original.
-                    task.wait(TP_TO_ORIGIN_WAIT)
-                    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
-                        LocalPlayer.Character.HumanoidRootPart.CFrame = ORIGIN_CFRAME
-                    end
-
-                    -- Verifica distância segura.
-                    local dist = (LocalPlayer.Character.HumanoidRootPart.Position - targetRoot.Position).Magnitude
-                    if dist > SAFE_DISTANCE then
-                        -- Longe: espera 15.5 s antes de tentar novamente.
-                        task.wait(SAFE_WAIT)
-                    else
-                        -- Perto: mantém voo atrás das costas e dispara Gojo.
-                        while KillAllActive and targetModel and targetModel.Parent do
-                            local newTargetRoot = targetModel:FindFirstChild("HumanoidRootPart")
-                            if not newTargetRoot then break end
-                            LocalPlayer.Character.HumanoidRootPart.CFrame =
-                                newTargetRoot.CFrame * CFrame.new(0, 0, -2)
-                            -- Dispara GojoService (evento principal).
-                            GojoRE:FireServer(false, nil)
-                            -- Executa skills a cada 3 s.
-                            task.wait(ATTACK_INTERVAL)
-                            if not KillAllActive then break end
-                            LapseBlueRE:FireServer(LocalPlayer.Character.Moveset["Lapse Blue"], nil)
-                            task.wait(ATTACK_INTERVAL)
-                            if not KillAllActive then break end
-                            ReversalRedRE:FireServer(LocalPlayer.Character.Moveset["Reversal Red"], nil)
-                            task.wait(ATTACK_INTERVAL)
-                            if not KillAllActive then break end
-                            TwofoldKickRE:FireServer(LocalPlayer.Character.Moveset["Twofold Kick"], nil)
-                            task.wait(ATTACK_INTERVAL)
+                -- Ataque ao Dummy
+                if KillAllActive then
+                    local dummy = findDummy()
+                    if dummy then
+                        local tr = dummy:FindFirstChild("HumanoidRootPart")
+                        local r = getRoot()
+                        if tr and r then
+                            pcall(function()
+                                r.CFrame = tr.CFrame * CFrame.new(0, 0, -2)
+                                tr.CFrame = CFrame.lookAt(tr.Position, r.Position)
+                            end)
+                            pcall(function()
+                                RapidPunchesRE:FireServer(
+                                    LocalPlayer.Character.Moveset["Rapid Punches"], nil)
+                            end)
+                            task.wait(TP_TO_ORIGIN_WAIT)
+                            local r2b = getRoot()
+                            if r2b then pcall(function() r2b.CFrame = ORIGIN_CFRAME end) end
+                            task.wait(0.2)
+                            local r3 = getRoot()
+                            local tr2 = dummy:FindFirstChild("HumanoidRootPart")
+                            if r3 and tr2 then
+                                local dist = (r3.Position - tr2.Position).Magnitude
+                                if dist > SAFE_DISTANCE then
+                                    task.wait(SAFE_WAIT)
+                                else
+                                    while KillAllActive and dummy and dummy.Parent and isAlive() do
+                                        local nr = getRoot()
+                                        local ntr = dummy:FindFirstChild("HumanoidRootPart")
+                                        if not nr or not ntr then break end
+                                        pcall(function() nr.CFrame = ntr.CFrame * CFrame.new(0,0,-2) end)
+                                        pcall(function() GojoRE:FireServer(false, nil) end)
+                                        task.wait(ATTACK_INTERVAL)
+                                        if not KillAllActive then break end
+                                        pcall(function()
+                                            LapseBlueRE:FireServer(
+                                                LocalPlayer.Character.Moveset["Lapse Blue"], nil)
+                                        end)
+                                        task.wait(ATTACK_INTERVAL)
+                                        if not KillAllActive then break end
+                                        pcall(function()
+                                            ReversalRedRE:FireServer(
+                                                LocalPlayer.Character.Moveset["Reversal Red"], nil)
+                                        end)
+                                        task.wait(ATTACK_INTERVAL)
+                                        if not KillAllActive then break end
+                                        pcall(function()
+                                            TwofoldKickRE:FireServer(
+                                                LocalPlayer.Character.Moveset["Twofold Kick"], nil)
+                                        end)
+                                        task.wait(ATTACK_INTERVAL)
+                                    end
+                                end
+                            end
                         end
+                    else
+                        Notify("Kill All", "Nenhum Dummy encontrado", "alert-circle")
+                        task.wait(2)
                     end
                 end
             end
-
-            task.wait(0.5) -- pequeno respiro entre ciclos
+            task.wait(0.5)
         end
-    end)
-    table.insert(CurrentLoopThreads, thread)
+    end))
 end
 
----------------------------------------------------------------------
--- 6. CRIAÇÃO DA UI (WindUI)
----------------------------------------------------------------------
-local WindUI = loadstring(game:HttpGet(
+--============================================================
+-- 14. CRIAÇÃO DA UI
+--============================================================
+WindUI = loadstring(game:HttpGet(
     "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
 ))()
 
@@ -359,134 +458,120 @@ local Window = WindUI:CreateWindow({
     ScrollBarEnabled = false,
 })
 
--- Aba principal ---------------------------------------------------------
-local MainTab = Window:Tab({
-    Title = "Main",
-    Icon = "bird",
-})
-
--- Toggle principal ------------------------------------------------------
-local KillAllToggle = MainTab:Toggle({
-    Title = "0.2 KILL ALL GOJO [BETA]",
-    Desc = "Ativa o loop completo de kill all.",
-    Icon = "sword",
-    Type = "Checkbox",
-    Value = getConfig("KillAllToggle", false),
-    Callback = function(state)
-        setConfig("KillAllToggle", state)
-        if state then
-            startKillAllLoop()
-        else
-            stopAllLoops()
-        end
-    end,
-})
-
--- Se o toggle já estava ativo na configuração salva, inicia automaticamente.
-if getConfig("KillAllToggle", false) then
-    KillAllToggle:Set(true)
-    startKillAllLoop()
+if ConfigState.Theme then
+    pcall(function() WindUI:SetTheme(ConfigState.Theme) end)
+end
+if ConfigState.Transparent then
+    pcall(function() Window:ToggleTransparency(true) end)
+end
+if ConfigState.ToggleKey then
+    pcall(function() Window:SetToggleKey(Enum.KeyCode[ConfigState.ToggleKey]) end)
 end
 
--- Aba de configurações (tema, transparência, keybind) -------------------
-local ConfigTab = Window:Tab({
-    Title = "Config",
-    Icon = "settings",
+local MainTab = Window:Tab({ Title = "Main", Icon = "bird" })
+
+local KillAllToggle = MainTab:Toggle({
+    Title = "0.2 KILL ALL GOJO [BETA]",
+    Desc = "Ativa o loop completo de Kill All + Awakening.",
+    Icon = "sword",
+    Type = "Checkbox",
+    Value = getCfg("KillAllToggle", false),
+    Callback = function(state)
+        setCfg("KillAllToggle", state)
+        if state then startKillAll() else stopAllLoops() end
+    end,
 })
 
+if getCfg("KillAllToggle", false) then
+    task.defer(function() KillAllToggle:Set(true); startKillAll() end)
+end
+
+-- Aba de status ao vivo -----------------------------------------
+local StatusTab = Window:Tab({ Title = "Status", Icon = "activity" })
+local StatusPara = StatusTab:Paragraph({
+    Title = "Estado Atual",
+    Desc  = "Carregando...",
+    Image = "",
+})
+task.spawn(function()
+    while task.wait(0.5) do
+        local txt = string.format(
+            "Ult: %d%%   |   Vivo: %s   |   KillAll: %s   |   Awakening: %s\nJogadores: %d   |   Dummy: %s",
+            getUltPercent(),
+            tostring(isAlive()),
+            tostring(KillAllActive),
+            tostring(AwakenActive),
+            #Players:GetPlayers(),
+            findDummy() and "Sim" or "Não"
+        )
+        pcall(function() StatusPara:SetDesc(txt) end)
+    end
+end)
+
+-- Aba Config -----------------------------------------------------
+local ConfigTab = Window:Tab({ Title = "Config", Icon = "settings" })
+
 ConfigTab:Dropdown({
-    Title = "Theme",
+    Title  = "Theme",
     Values = (function()
-        local names = {}
-        for name in pairs(WindUI:GetThemes()) do
-            table.insert(names, name)
-        end
-        table.sort(names)
-        return names
+        local n = {}
+        for name in pairs(WindUI:GetThemes()) do table.insert(n, name) end
+        table.sort(n)
+        return n
     end)(),
-    Callback = function(selected)
-        WindUI:SetTheme(selected)
-        setConfig("Theme", selected)
-    end,
+    Value = ConfigState.Theme,
+    Callback = function(sel) WindUI:SetTheme(sel); setCfg("Theme", sel) end,
 })
 
 ConfigTab:Toggle({
     Title = "Transparent",
-    Value = getConfig("Transparent", false),
-    Callback = function(state)
-        Window:ToggleTransparency(state)
-        setConfig("Transparent", state)
-    end,
+    Value = getCfg("Transparent", false),
+    Callback = function(s) Window:ToggleTransparency(s); setCfg("Transparent", s) end,
 })
 
 ConfigTab:Keybind({
     Title = "Toggle UI Key",
-    Value = getConfig("ToggleKey", "RightShift"),
+    Value = getCfg("ToggleKey", "RightShift"),
     Callback = function(v)
         Window:SetToggleKey(Enum.KeyCode[v])
-        setConfig("ToggleKey", v)
+        setCfg("ToggleKey", v)
     end,
 })
 
--- Botões de salvar e resetar --------------------------------------------
 ConfigTab:Button({
     Title = "Salvar Configuração",
-    Desc = "Salva o estado atual dos toggles e opções.",
+    Desc  = "Salva todas as preferências atuais.",
     Callback = function()
         saveConfig(ConfigState)
-        WindUI:Notify({
-            Title = "Configuração Salva",
-            Content = "As preferências foram salvas.",
-            Duration = 3,
-            Icon = "save",
-        })
+        Notify("Configuração Salva", "Suas preferências foram salvas.", "save")
     end,
 })
 
 ConfigTab:Button({
     Title = "Resetar Configuração",
-    Desc = "Apaga todas as preferências salvas.",
+    Desc  = "Apaga preferências e restaura padrões.",
     Callback = function()
         if isfile and isfile(CONFIG_FILE) then
-            delfile(CONFIG_FILE)
+            pcall(function() delfile(CONFIG_FILE) end)
         end
         ConfigState = {}
-        -- Reseta os elementos da UI para os padrões.
-        KillAllToggle:Set(false)
+        pcall(function() KillAllToggle:Set(false) end)
         stopAllLoops()
-        WindUI:Notify({
-            Title = "Configuração Resetada",
-            Content = "As preferências foram restauradas ao padrão.",
-            Duration = 3,
-            Icon = "refresh-cw",
-        })
+        Notify("Configuração Resetada", "Tudo voltou ao padrão.", "refresh-cw")
     end,
 })
 
----------------------------------------------------------------------
--- 7. NOTIFICAÇÃO INICIAL E TRATAMENTO DE ERROS
----------------------------------------------------------------------
-WindUI:Notify({
-    Title = "0.2 KILL ALL GOJO",
-    Content = "Script carregado. Ative o toggle para começar.",
-    Duration = 4,
-    Icon = "check-circle",
+ConfigTab:Button({
+    Title = "Forçar Server Hop",
+    Desc  = "Troca para servidor com 4+ jogadores.",
+    Callback = function()
+        Notify("Server Hop", "Procurando servidor...", "refresh-cw")
+        task.wait(0.5)
+        serverHop(MIN_PLAYERS)
+    end,
 })
 
--- Wrapper para capturar erros nos loops e notificar.
-local function safeLoop(fn)
-    return function(...)
-        local ok, err = pcall(fn, ...)
-        if not ok then
-            WindUI:Notify({
-                Title = "Erro no script",
-                Content = tostring(err),
-                Duration = 5,
-                Icon = "alert-triangle",
-            })
-        end
-    end
-end
-
--- Substitui as chamadas de loop por versões protegidas (opcional, mas recomendado).
--- (Você pode envolver startKillAllLoop e o loop de Awakening com safeLoop se desejar.)
+-- Flush das notificações pendentes
+for _, n in ipairs(Pending) do Notify(n[1], n[2], n[3]) end
+Pending = {}
+Notify("0.2 KILL ALL GOJO", "Script carregado. Ative o toggle para começar.", "check-circle")
