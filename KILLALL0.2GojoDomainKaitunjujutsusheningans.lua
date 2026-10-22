@@ -1,5 +1,5 @@
 --[[
-    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v4
+    0.2 KILL ALL GOJO [Jujutsu Shenanigans] — v5
     by jane_doesigma — UI: WindUI
 ]]
 
@@ -7,7 +7,6 @@
 -- 1. SERVIÇOS
 --============================================================
 local Players             = game:GetService("Players")
-local ReplicatedStorage   = game:GetService("ReplicatedStorage")
 local TeleportService     = game:GetService("TeleportService")
 local HttpService         = game:GetService("HttpService")
 local VirtualInputManager = game:GetService("VirtualInputManager")
@@ -17,46 +16,17 @@ local LocalPlayer = Players.LocalPlayer
 --============================================================
 -- 2. CONSTANTES
 --============================================================
-local ORIGIN_CFRAME      = CFrame.new(-76.900146, -41.295113, -213.595673)
-local VOID_CFRAME        = CFrame.new(-144, -1500, -352)   -- X:-144  Y:-1500  Z:-352
-
-local ULT_MAX            = 100
-local TP_TO_ORIGIN_WAIT  = 0.6
-local SAFE_DISTANCE      = 50
-local SAFE_WAIT          = 15.5
-local ATTACK_INTERVAL    = 3
-local AWAKEN_LOOP_TIME   = 9.5
-local AWAKEN_TP_INTERVAL = 0.25
-local AWAKEN_COOLDOWN    = 30
-local MIN_PLAYERS        = 4
-
-local TP_INTERVAL        = 0.5
-local COUNTER_TIME       = 300
-local REVERT_THRESHOLD   = 10
-
-local TPALL_INTERVAL     = 0.6
-local TPALL_OFFSET       = CFrame.new(0, 0, -2)
+local VOID_CFRAME          = CFrame.new(-144, -1500, -352)
+local ULT_MAX              = 100
+local MIN_PLAYERS          = 4
+local TPALL_OFFSET         = CFrame.new(0, 0, -2)
+local DOMAIN_TP_INTERVAL   = 0.27
+local DOMAIN_GR_INTERVAL   = 0.2
+local DOMAIN_VOID_WAIT     = 2
+local DOMAIN_GR_START_WAIT = 0.5
 
 --============================================================
--- 3. REMOTE EVENTS
---============================================================
-local function getRE(svc, ev)
-    return ReplicatedStorage:WaitForChild("Knit")
-        :WaitForChild("Knit")
-        :WaitForChild("Services")
-        :WaitForChild(svc)
-        :WaitForChild("RE")
-        :WaitForChild(ev)
-end
-
-local RapidPunchesRE = getRE("RapidPunchesService", "Activated")
-local GojoRE         = getRE("GojoService", "Activated")
-local LapseBlueRE    = getRE("LapseBlueService", "Activated")
-local ReversalRedRE  = getRE("ReversalRedService", "Activated")
-local TwofoldKickRE  = getRE("TwofoldKickService", "Activated")
-
---============================================================
--- 4. CONFIG PERSISTENTE
+-- 3. CONFIG PERSISTENTE
 --============================================================
 local CONFIG_FOLDER = "0.2KillAllGojo"
 local CONFIG_FILE   = CONFIG_FOLDER .. "/config.json"
@@ -81,31 +51,7 @@ local function getCfg(k, d) if ConfigState[k] ~= nil then return ConfigState[k] 
 local function setCfg(k, v) ConfigState[k] = v end
 
 --============================================================
--- 5. ESTADO DOS LOOPS
---============================================================
-local KillAllActive     = false
-local AwakenActive      = false
-local TeleportAllActive = false
-local Loops             = {}
-
-local function stopAllLoops()
-    KillAllActive     = false
-    AwakenActive      = false
-    TeleportAllActive = false
-    for i = #Loops, 1, -1 do
-        local t = Loops[i]
-        pcall(function()
-            if coroutine.status(t) ~= "dead" then task.cancel(t) end
-        end)
-        table.remove(Loops, i)
-    end
-end
-
-local function stopKillAllOnly() KillAllActive = false end
-local function track(t) table.insert(Loops, t); return t end
-
---============================================================
--- 6. NOTIFICAÇÃO
+-- 4. NOTIFICAÇÃO
 --============================================================
 local WindUI, Pending = nil, {}
 local function Notify(title, content, icon)
@@ -117,7 +63,7 @@ local function Notify(title, content, icon)
 end
 
 --============================================================
--- 7. ULT
+-- 5. ULT
 --============================================================
 local ULT_ATTRS = {
     "Ultimate","Ult","Awakening","AwakeningBar",
@@ -134,12 +80,8 @@ local function getUltPercent()
 end
 
 --============================================================
--- 8. HELPERS DE PERSONAGEM
+-- 6. HELPERS
 --============================================================
-local function getRoot()
-    local c = LocalPlayer.Character
-    return c and c:FindFirstChild("HumanoidRootPart")
-end
 local function getHum()
     local c = LocalPlayer.Character
     return c and c:FindFirstChildOfClass("Humanoid")
@@ -149,103 +91,20 @@ local function isAlive()
     return h and h.Health > 0
 end
 
-local function killCharacter()
-    local h = getHum()
-    if h and h.Health > 0 then
-        pcall(function() h.Health = 0 end)
-    end
-end
-
-local function waitForRespawn(timeout)
-    timeout = timeout or 15
-    local t0 = tick()
-    while tick() - t0 < 4 do
-        if not isAlive() then break end
-        task.wait(0.1)
-    end
-    t0 = tick()
-    while tick() - t0 < timeout do
-        if isAlive() and getRoot() then
-            task.wait(0.6)
-            return true
-        end
-        task.wait(0.2)
-    end
-    return false
-end
-
-local function isNear(pos, target, thr)
-    return (pos - target).Magnitude <= (thr or REVERT_THRESHOLD)
-end
-
--- Teleporte robusto: seta CFrame + zera velocidade pra física não empurrar de volta
 local function forceTeleport(cf)
     local char = LocalPlayer.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     if not hrp then return false end
     pcall(function() hrp.CFrame = cf end)
-    pcall(function() hrp.AssemblyLinearVelocity = Vector3.zero end)
+    pcall(function() hrp.AssemblyLinearVelocity  = Vector3.zero end)
     pcall(function() hrp.AssemblyAngularVelocity = Vector3.zero end)
     return true
 end
 
 --============================================================
--- 9. DETECÇÃO DE ALVOS (CORRIGIDA)
+-- 7. ALVOS (SÓ JOGADORES VIVOS)
 --============================================================
-local DUMMY_PATTERNS = { "dummy", "tester1234", "trainingdummy", "training_dummy", "targetdummy", "target_dummy" }
-
-local function isDummyName(name)
-    local lower = name:lower()
-    for _, p in ipairs(DUMMY_PATTERNS) do
-        if lower:find(p, 1, true) then return true end
-    end
-    return false
-end
-
--- HumanoidRootPart com fallback (R6, R15 e dummies customizados)
-local function getHRP(model)
-    if not model then return nil end
-    return model:FindFirstChild("HumanoidRootPart")
-        or model:FindFirstChild("RootPart")
-        or model:FindFirstChild("UpperTorso")
-        or model:FindFirstChild("Torso")
-        or model:FindFirstChild("Head")
-end
-
--- Cache de dummies (refresh a cada 0.5s pra não spammar GetDescendants)
-local DummyCache = { list = {}, lastUpdate = 0 }
-
-local function refreshDummyCache(force)
-    local now = tick()
-    if not force and (now - DummyCache.lastUpdate) < 0.5 then
-        return DummyCache.list
-    end
-    DummyCache.lastUpdate = now
-    local list = {}
-    -- Busca recursiva por TODOS os models cujo nome bate com padrão de dummy
-    for _, o in ipairs(workspace:GetDescendants()) do
-        if o:IsA("Model") and isDummyName(o.Name) then
-            local h = o:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                local r = getHRP(o)
-                if r then table.insert(list, { model = o, root = r }) end
-            end
-        end
-    end
-    DummyCache.list = list
-    return list
-end
-
-local function findDummy()
-    for _, d in ipairs(refreshDummyCache()) do
-        if d.model and d.model.Parent then
-            local h = d.model:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then return d.model end
-        end
-    end
-end
-
-local function getAliveTargets()
+local function getAlivePlayers()
     local list = {}
     for _, p in ipairs(Players:GetPlayers()) do
         if p ~= LocalPlayer and p.Character then
@@ -256,19 +115,11 @@ local function getAliveTargets()
             end
         end
     end
-    for _, d in ipairs(refreshDummyCache()) do
-        if d.root and d.root.Parent then
-            local h = d.model:FindFirstChildOfClass("Humanoid")
-            if h and h.Health > 0 then
-                table.insert(list, { root = d.root })
-            end
-        end
-    end
     return list
 end
 
 --============================================================
--- 10. SERVER HOP
+-- 8. SERVER HOP
 --============================================================
 local function serverHop(minPlayers)
     minPlayers = minPlayers or MIN_PLAYERS
@@ -291,7 +142,7 @@ local function serverHop(minPlayers)
 end
 
 --============================================================
--- 11. TECLAS
+-- 9. TECLAS
 --============================================================
 local function pressKey(kc)
     pcall(function()
@@ -302,224 +153,97 @@ local function pressKey(kc)
 end
 
 --============================================================
--- 12. AWAKENING
+-- 10. DOMAIN EXPANSION
 --============================================================
-local lastAwakenTime = 0
+local DomainActive    = false
+local DomainToggleRef = nil
 
-local function startAwakening()
-    if AwakenActive then return end
-    AwakenActive = true
-    lastAwakenTime = tick()
+local function stopDomain() DomainActive = false end
 
-    track(task.spawn(function()
-        local gLoop = task.spawn(function()
-            while AwakenActive and getUltPercent() >= 100 do
-                pressKey(Enum.KeyCode.G)
-                task.wait(0.05)
-                pressKey(Enum.KeyCode.R)
-                task.wait(0.2)
-            end
-        end)
-        local tpLoop = task.spawn(function()
-            while AwakenActive do
-                for _, t in ipairs(getAliveTargets()) do
-                    if not AwakenActive then break end
-                    if t.root and t.root.Parent then
-                        forceTeleport(t.root.CFrame * TPALL_OFFSET)
-                    end
-                    task.wait(AWAKEN_TP_INTERVAL)
-                end
-                task.wait(0.05)
-            end
-        end)
-
-        task.wait(AWAKEN_LOOP_TIME)
-        AwakenActive = false
-        pcall(function() if coroutine.status(gLoop) ~= "dead" then task.cancel(gLoop) end end)
-        pcall(function() if coroutine.status(tpLoop) ~= "dead" then task.cancel(tpLoop) end end)
-
-        if #Players:GetPlayers() < MIN_PLAYERS then
-            Notify("Server Hop", "Procurando servidor com " .. MIN_PLAYERS .. "+ jogadores...", "refresh-cw")
-            task.wait(1)
-            serverHop(MIN_PLAYERS)
+local function startDomain()
+    -- Checa Ult
+    local percent = getUltPercent()
+    if percent < 100 then
+        Notify("Domain Expansion", "Pegue Awakening primeiro! (" .. percent .. "%)", "alert-triangle")
+        DomainActive = false
+        setCfg("DomainToggle", false)
+        if DomainToggleRef then
+            task.defer(function() pcall(function() DomainToggleRef:Set(false) end) end)
         end
-    end))
-end
-
-task.spawn(function()
-    while task.wait(0.2) do
-        local p = getUltPercent()
-        if p >= 100
-            and not AwakenActive
-            and (tick() - lastAwakenTime) > AWAKEN_COOLDOWN then
-            stopKillAllOnly()
-            Notify("Ult 100%", "Iniciando Awakening automático...", "zap")
-            startAwakening()
-        end
+        return
     end
-end)
 
---============================================================
--- 13. KILL ALL (teleporta 1x + mata 1x)
---============================================================
-local function startKillAll()
-    if KillAllActive then return end
-    KillAllActive = true
+    if DomainActive then return end
+    DomainActive = true
 
-    track(task.spawn(function()
-        while KillAllActive do
-            if not isAlive() then
-                waitForRespawn(15)
-                task.wait(0.3)
-                continue
+    task.spawn(function()
+        -- 1) Teleporta pro void UMA VEZ
+        forceTeleport(VOID_CFRAME)
+        task.wait(DOMAIN_VOID_WAIT)
+        if not DomainActive then return end
+
+        -- 2) Loop G+R contínuo
+        local grLoop = task.spawn(function()
+            while DomainActive do
+                pressKey(Enum.KeyCode.G)
+                task.wait(0.03)
+                pressKey(Enum.KeyCode.R)
+                task.wait(DOMAIN_GR_INTERVAL - 0.03)
             end
+        end)
 
-            local root = getRoot()
-            if not root then task.wait(1); continue end
-            local oldPos = root.Position
-
-            forceTeleport(ORIGIN_CFRAME)
-            task.wait(TP_INTERVAL)
-
-            local r2 = getRoot()
-            if not r2 then task.wait(1); continue end
-            local reverted = isNear(r2.Position, oldPos, REVERT_THRESHOLD)
-
-            if reverted then
-                Notify("Kill All", "Boneco voltou — resetando...", "skull")
-                forceTeleport(ORIGIN_CFRAME)
-                task.wait(TP_INTERVAL)
-                killCharacter()
-                waitForRespawn(20)
-                if not isAlive() then task.wait(3) end
-                task.wait(0.5)
-            else
-                local elapsed, interrupted = 0, false
-                while elapsed < COUNTER_TIME and KillAllActive do
-                    task.wait(1)
-                    elapsed = elapsed + 1
-                    local r = getRoot()
-                    if not r or not isAlive() then interrupted = true; break end
-                    if not isNear(r.Position, ORIGIN_CFRAME.Position, 15) then
-                        interrupted = true; break
-                    end
-                end
-                if interrupted then
-                    Notify("Kill All", "Saiu do CFrame — reiniciando", "alert-triangle")
-                    task.wait(0.5); continue
-                end
-
-                if KillAllActive then
-                    local dummy = findDummy()
-                    if dummy then
-                        local tr = getHRP(dummy)
-                        local r = getRoot()
-                        if tr and r then
-                            pcall(function()
-                                tr.CFrame = CFrame.lookAt(tr.Position, r.Position)
-                            end)
-                            forceTeleport(tr.CFrame * TPALL_OFFSET)
-                            pcall(function()
-                                RapidPunchesRE:FireServer(
-                                    LocalPlayer.Character.Moveset["Rapid Punches"], nil)
-                            end)
-                            task.wait(TP_TO_ORIGIN_WAIT)
-                            forceTeleport(ORIGIN_CFRAME)
-                            task.wait(0.2)
-                            local r3 = getRoot()
-                            local tr2 = getHRP(dummy)
-                            if r3 and tr2 then
-                                local dist = (r3.Position - tr2.Position).Magnitude
-                                if dist > SAFE_DISTANCE then
-                                    task.wait(SAFE_WAIT)
-                                else
-                                    while KillAllActive and dummy and dummy.Parent and isAlive() do
-                                        local nr  = getRoot()
-                                        local ntr = getHRP(dummy)
-                                        if not nr or not ntr then break end
-                                        forceTeleport(ntr.CFrame * TPALL_OFFSET)
-                                        pcall(function() GojoRE:FireServer(false, nil) end)
-                                        task.wait(ATTACK_INTERVAL)
-                                        if not KillAllActive then break end
-                                        pcall(function()
-                                            LapseBlueRE:FireServer(
-                                                LocalPlayer.Character.Moveset["Lapse Blue"], nil)
-                                        end)
-                                        task.wait(ATTACK_INTERVAL)
-                                        if not KillAllActive then break end
-                                        pcall(function()
-                                            ReversalRedRE:FireServer(
-                                                LocalPlayer.Character.Moveset["Reversal Red"], nil)
-                                        end)
-                                        task.wait(ATTACK_INTERVAL)
-                                        if not KillAllActive then break end
-                                        pcall(function()
-                                            TwofoldKickRE:FireServer(
-                                                LocalPlayer.Character.Moveset["Twofold Kick"], nil)
-                                        end)
-                                        task.wait(ATTACK_INTERVAL)
-                                    end
-                                end
-                            end
-                        end
-                    else
-                        Notify("Kill All", "Nenhum Dummy encontrado", "alert-circle")
-                        task.wait(2)
-                    end
-                end
-            end
-            task.wait(0.5)
+        -- 3) Espera 0.5s pra começar os teleportes
+        task.wait(DOMAIN_GR_START_WAIT)
+        if not DomainActive then
+            pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
+            return
         end
-    end))
-end
 
---============================================================
--- 14. TELEPORT ALL 0.2 (corrigido)
---============================================================
-local function startTeleportAll()
-    if TeleportAllActive then return end
-    TeleportAllActive = true
-
-    track(task.spawn(function()
+        -- 4) Loop de teleporte entre players vivos
         local lastRoot = nil
-        local warnSent = false
-        while TeleportAllActive do
-            if not isAlive() then
-                lastRoot = nil
-                task.wait(1)
-                continue
+        while DomainActive do
+            local alive = getAlivePlayers()
+
+            if #alive == 0 then
+                -- Todos mortos → server hop na hora
+                Notify("Domain Expansion", "Todos mortos! Server hop...", "refresh-cw")
+                DomainActive = false
+                pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
+                setCfg("DomainToggle", false)
+                if DomainToggleRef then
+                    task.defer(function() pcall(function() DomainToggleRef:Set(false) end) end)
+                end
+                task.wait(0.5)
+                serverHop(MIN_PLAYERS)
+                break
             end
 
-            local targets = getAliveTargets()
-            if #targets > 0 then
-                warnSent = false
-
-                -- Filtra pra não repetir o último alvo (se houver alternativa)
+            if isAlive() then
+                -- Filtra pra não repetir o último alvo, se possível
                 local candidates = {}
-                for _, t in ipairs(targets) do
-                    if t.root and t.root.Parent and t.root ~= lastRoot then
+                for _, t in ipairs(alive) do
+                    if t.root ~= lastRoot and t.root.Parent then
                         table.insert(candidates, t)
                     end
                 end
-                local pool   = (#candidates > 0) and candidates or targets
+                local pool   = (#candidates > 0) and candidates or alive
                 local target = pool[math.random(1, #pool)]
 
                 if target and target.root and target.root.Parent then
                     forceTeleport(target.root.CFrame * TPALL_OFFSET)
                     lastRoot = target.root
                 end
-            elseif not warnSent then
-                Notify("Teleport All", "Nenhum alvo encontrado", "alert-circle")
-                warnSent = true
             end
 
-            task.wait(TPALL_INTERVAL)
+            task.wait(DOMAIN_TP_INTERVAL)
         end
-    end))
+
+        pcall(function() if coroutine.status(grLoop) ~= "dead" then task.cancel(grLoop) end end)
+    end)
 end
 
 --============================================================
--- 15. UI
+-- 11. UI
 --============================================================
 WindUI = loadstring(game:HttpGet(
     "https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"
@@ -549,39 +273,38 @@ if ConfigState.ToggleKey   then pcall(function() Window:SetToggleKey(Enum.KeyCod
 -- Aba principal -------------------------------------------------
 local MainTab = Window:Tab({ Title = "Main", Icon = "bird" })
 
-MainTab:Toggle({
-    Title = "0.2 KILL ALL GOJO [BETA]",
-    Desc  = "Loop completo de Kill All + Awakening.",
-    Icon  = "sword",
+DomainToggleRef = MainTab:Toggle({
+    Title = "Kill All 0.2 Domain Expansion [GOJO]",
+    Desc  = "Requer 100% de Awakening. Void → G+R → teleporta entre players vivos.",
+    Icon  = "zap",
     Type  = "Checkbox",
-    Value = getCfg("KillAllToggle", false),
+    Value = getCfg("DomainToggle", false),
     Callback = function(state)
-        setCfg("KillAllToggle", state)
-        if state then startKillAll() else stopKillAllOnly() end
+        if state then
+            if getUltPercent() < 100 then
+                setCfg("DomainToggle", false)
+                Notify("Domain Expansion", "Pegue Awakening primeiro! (" .. getUltPercent() .. "%)", "alert-triangle")
+                task.defer(function() pcall(function() DomainToggleRef:Set(false) end) end)
+                return
+            end
+            setCfg("DomainToggle", true)
+            startDomain()
+        else
+            setCfg("DomainToggle", false)
+            stopDomain()
+        end
     end,
 })
 
-MainTab:Toggle({
-    Title = "Teleport All 0.2",
-    Desc  = "Teleporta atrás de um alvo aleatório (jogadores + Dummy) a cada 0.6s.",
-    Icon  = "move",
-    Type  = "Checkbox",
-    Value = getCfg("TeleportAllToggle", false),
-    Callback = function(state)
-        setCfg("TeleportAllToggle", state)
-        if state then startTeleportAll() else TeleportAllActive = false end
-    end,
-})
-
--- Bypass VOID: empurra 15x em 0.75s pra "grudar" no void antes do anticheat/física
+-- Bypass void (mantido) -----------------------------------------
 MainTab:Button({
     Title = "Bypass Teleport (Void)",
     Desc  = "Teleporta direto pro void X:-144 Y:-1500 Z:-352.",
     Callback = function()
         task.spawn(function()
-            for i = 1, 15 do
+            for _ = 1, 15 do
                 local char = LocalPlayer.Character
-                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                local hrp  = char and char:FindFirstChild("HumanoidRootPart")
                 if hrp then
                     pcall(function()
                         hrp.CFrame = VOID_CFRAME
@@ -597,44 +320,19 @@ MainTab:Button({
     end,
 })
 
-MainTab:Button({
-    Title = "Teleport Test",
-    Desc  = "Teleporta pro CFrame original salvo (X:-76.9 Y:-41.29 Z:-213.59).",
-    Callback = function()
-        if forceTeleport(ORIGIN_CFRAME) then
-            Notify("Teleport Test", "Teleportado pro CFrame original.", "crosshair")
+-- Auto-start (só se Ult estiver 100%) ---------------------------
+if getCfg("DomainToggle", false) then
+    task.defer(function()
+        if getUltPercent() >= 100 then
+            startDomain()
         else
-            Notify("Teleport Test", "Personagem não encontrado.", "alert-circle")
+            setCfg("DomainToggle", false)
+            if DomainToggleRef then pcall(function() DomainToggleRef:Set(false) end) end
         end
-    end,
-})
+    end)
+end
 
-if getCfg("KillAllToggle", false)    then task.defer(startKillAll) end
-if getCfg("TeleportAllToggle", false) then task.defer(startTeleportAll) end
-
--- Aba Status ----------------------------------------------------
-local StatusTab = Window:Tab({ Title = "Status", Icon = "activity" })
-local StatusPara = StatusTab:Paragraph({
-    Title = "Estado Atual",
-    Desc  = "Carregando...",
-    Image = "",
-})
-task.spawn(function()
-    while task.wait(0.5) do
-        local dummyCount = #refreshDummyCache()
-        local txt = string.format(
-            "Ult: %d%%   |   Vivo: %s   |   KillAll: %s   |   TPAll: %s   |   Awakening: %s\n" ..
-            "Jogadores: %d   |   Dummies vivos: %d",
-            getUltPercent(), tostring(isAlive()),
-            tostring(KillAllActive), tostring(TeleportAllActive),
-            tostring(AwakenActive),
-            #Players:GetPlayers(), dummyCount
-        )
-        pcall(function() StatusPara:SetDesc(txt) end)
-    end
-end)
-
--- Aba Config ----------------------------------------------------
+-- Aba Config (mantida intacta) ----------------------------------
 local ConfigTab = Window:Tab({ Title = "Config", Icon = "settings" })
 
 ConfigTab:Dropdown({
@@ -679,7 +377,8 @@ ConfigTab:Button({
     Callback = function()
         if isfile and isfile(CONFIG_FILE) then pcall(function() delfile(CONFIG_FILE) end) end
         ConfigState = {}
-        stopAllLoops()
+        stopDomain()
+        if DomainToggleRef then pcall(function() DomainToggleRef:Set(false) end) end
         Notify("Configuração Resetada", "Tudo voltou ao padrão.", "refresh-cw")
     end,
 })
@@ -697,4 +396,4 @@ ConfigTab:Button({
 -- Flush notificações pendentes
 for _, n in ipairs(Pending) do Notify(n[1], n[2], n[3]) end
 Pending = {}
-Notify("0.2 KILL ALL GOJO", "Script carregado. Ative um toggle pra começar.", "check-circle")
+Notify("0.2 KILL ALL GOJO", "Script carregado. Ative o toggle pra começar.", "check-circle")
