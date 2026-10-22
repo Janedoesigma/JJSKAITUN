@@ -24,11 +24,11 @@ local MIN_PLAYERS          = 4
 local TPALL_OFFSET         = CFrame.new(0, 0, 0)
 
 -- ✅ NOVO: quantos teleportes ficar no mesmo alvo antes de trocar
-local STICK_TELEPORTS      = 5
+local STICK_TELEPORTS      = 22
 
-local DOMAIN_TP_INTERVAL   = 0.1
+local DOMAIN_TP_INTERVAL   = 0.21
 local DOMAIN_GR_INTERVAL   = 0.2
-local DOMAIN_VOID_WAIT     = 2
+local DOMAIN_VOID_WAIT     = 1.5
 local DOMAIN_GR_START_WAIT = 0.5
 
 --============================================================
